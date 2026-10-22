@@ -8,3 +8,9 @@ Publica os componentes do [trinks-ui](https://trinks-com.github.io/trinks-ui/bet
 O workflow abre o Storybook beta público num Chrome headless, passa por todas as stories e copia o CSS e o HTML depois de renderizados. Ele roda a cada 30 minutos em dia útil, das 8h às 20h, e só publica de novo quando o Storybook mudou. Também dá pra disparar na mão pelo Actions.
 
 Nada aqui vem do código do trinks-ui: é só o que o Storybook beta já mostra publicamente.
+
+## Arquivos fixos
+
+O que está em `estatico/` é copiado como está para o site a cada publicação. Hoje tem:
+
+- `deploy-orchestrator/deploy-orchestrator.css`: o CSS em comum das capturas das telas do deploy-orchestrator, que os frames da canvas do doop carregam por `<link>`. Só CSS, sem nenhum dado das telas.

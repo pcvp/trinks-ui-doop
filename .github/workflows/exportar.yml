@@ -4,6 +4,10 @@ name: Exportar trinks-ui para o doop
 # Chakra e o HTML de cada story, para as canvas do doop usarem os componentes reais.
 on:
   workflow_dispatch:
+  # Arquivos fixos (estatico/, ex.: o CSS das capturas do deploy-orchestrator) publicam na hora.
+  push:
+    branches: [main]
+    paths: ["estatico/**"]
   schedule:
     - cron: "*/30 11-23 * * 1-5"
 
@@ -25,6 +29,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       # O iframe.html referencia os bundles com hash: se não mudou, o Storybook é o mesmo.
       - name: Ver se o Storybook mudou
         id: versao
@@ -147,6 +154,7 @@ jobs:
           if (falhas.length) console.log(falhas);
           EOF
           echo "${{ steps.versao.outputs.atual }}" > site/versao.txt
+          cp -r estatico/. site/
 
       - name: Upload do site
         if: steps.versao.outputs.mudou == 'true'

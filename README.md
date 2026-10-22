@@ -14,3 +14,4 @@ Nada aqui vem do código do trinks-ui: é só o que o Storybook beta já mostra 
 O que está em `estatico/` é copiado como está para o site a cada publicação. Hoje tem:
 
 - `deploy-orchestrator/deploy-orchestrator.css`: o CSS em comum das capturas das telas do deploy-orchestrator, que os frames da canvas do doop carregam por `<link>`. Só CSS, sem nenhum dado das telas.
+- `deploy-orchestrator/fonts/`: Inter Tight (OFL) e um recorte do Material Symbols Rounded (Apache 2.0) só com os ícones das telas, declarados no próprio CSS. Assim o render dos frames não depende do Google Fonts.

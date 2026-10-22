@@ -100,9 +100,9 @@ jobs:
             const erro = await Promise.race([fim, new Promise(r => setTimeout(() => r('timeout'), 15000))]);
             if (erro) return { erro };
             await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-            // Portais (Drawer, Modal, Tooltip, Toast) ficam fora do #storybook-root.
+            // Portais (Drawer, Modal, Tooltip, Toast) ficam fora do #storybook-root; o span de medida do recharts não é componente.
             const portais = [...document.body.children]
-              .filter(el => !['SCRIPT', 'STYLE'].includes(el.tagName) && !el.id?.startsWith('storybook-') && !el.className?.toString().startsWith('sb-'))
+              .filter(el => !['SCRIPT', 'STYLE'].includes(el.tagName) && !el.id?.startsWith('storybook-') && el.id !== 'recharts_measurement_span' && !el.className?.toString().startsWith('sb-'))
               .map(el => el.outerHTML)
               .join('');
             // Só as regras novas desde a última story: o Emotion sempre insere no fim da folha.

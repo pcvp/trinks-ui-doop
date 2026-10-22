@@ -1,0 +1,159 @@
+name: Exportar trinks-ui para o doop
+
+# Lê o Storybook beta público do trinks-ui e publica no Pages o CSS gerado pelo
+# Chakra e o HTML de cada story, para as canvas do doop usarem os componentes reais.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/30 11-23 * * 1-5"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  STORYBOOK_URL: https://trinks-com.github.io/trinks-ui/beta
+  PAGES_URL: https://pcvp.github.io/trinks-ui-doop
+
+jobs:
+  exportar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # O iframe.html referencia os bundles com hash: se não mudou, o Storybook é o mesmo.
+      - name: Ver se o Storybook mudou
+        id: versao
+        run: |
+          atual=$(curl -fsSL "$STORYBOOK_URL/iframe.html" "$STORYBOOK_URL/index.json" | sha256sum | cut -c1-16)
+          publicada=$(curl -fsSL "$PAGES_URL/versao.txt" 2>/dev/null || true)
+          echo "atual=$atual" >> "$GITHUB_OUTPUT"
+          echo "Storybook: $atual | publicado: ${publicada:-nenhum}"
+          if [ "$atual" = "$publicada" ] && [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "mudou=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "mudou=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node
+        if: steps.versao.outputs.mudou == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Só a lib: o navegador é o Chrome que já vem no runner.
+      - name: Instalar playwright-core
+        if: steps.versao.outputs.mudou == 'true'
+        run: npm install --no-save --no-audit --no-fund playwright-core@1.58.1
+
+      - name: Gerar trinks-ui.css e components.json
+        if: steps.versao.outputs.mudou == 'true'
+        env:
+          OUT_DIR: site
+        run: |
+          node --input-type=module <<'EOF'
+          import { writeFile, mkdir } from 'node:fs/promises';
+          import { join } from 'node:path';
+          import { chromium } from 'playwright-core';
+
+          const inicio = Date.now();
+          const base = process.env.STORYBOOK_URL.replace(/\/$/, '');
+          const outDir = process.env.OUT_DIR;
+
+          const indice = await (await fetch(`${base}/index.json`)).json();
+          const stories = Object.values(indice.entries).filter(e => e.type === 'story');
+          const iframe = await (await fetch(`${base}/iframe.html`)).text();
+          const fontes = [...iframe.matchAll(/href="(https:\/\/fonts\.googleapis\.com\/css2[^"]+)"/g)].map(m => m[1].replace(/&amp;/g, '&'));
+
+          // Usa o Chrome que já vem instalado (no runner e na máquina), sem baixar navegador.
+          const browser = await chromium.launch({ channel: 'chrome' });
+          const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+          // Algumas stories recarregam a página sozinhas, então a abertura tenta de novo se for interrompida.
+          const abrir = async id => {
+            for (let tentativa = 1; ; tentativa++) {
+              try {
+                await page.goto(`${base}/iframe.html?id=${id}&viewMode=story`, { waitUntil: 'domcontentloaded' });
+                await page.waitForFunction(() => window.__STORYBOOK_ADDONS_CHANNEL__ && document.body.classList.contains('sb-show-main'), null, { timeout: 60000 });
+                return;
+              } catch (e) {
+                if (tentativa === 3) throw e;
+                await page.waitForTimeout(1000);
+              }
+            }
+          };
+
+          // Troca de story pelo canal do Storybook, sem recarregar o bundle a cada uma.
+          const renderizar = id => page.evaluate(async id => {
+            const canal = window.__STORYBOOK_ADDONS_CHANNEL__;
+            const fim = new Promise(resolve => {
+              const ok = () => { limpar(); resolve(null); };
+              const erro = e => { limpar(); resolve(String(e?.title ?? e?.message ?? e ?? 'erro')); };
+              const eventos = { storyRendered: ok, storyErrored: erro, storyThrewException: erro, storyMissing: erro };
+              const limpar = () => Object.entries(eventos).forEach(([n, f]) => canal.off(n, f));
+              Object.entries(eventos).forEach(([n, f]) => canal.on(n, f));
+            });
+            canal.emit('setCurrentStory', { storyId: id, viewMode: 'story' });
+            const erro = await Promise.race([fim, new Promise(r => setTimeout(() => r('timeout'), 15000))]);
+            if (erro) return { erro };
+            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+            // Portais (Drawer, Modal, Tooltip, Toast) ficam fora do #storybook-root.
+            const portais = [...document.body.children]
+              .filter(el => !['SCRIPT', 'STYLE'].includes(el.tagName) && !el.id?.startsWith('storybook-') && !el.className?.toString().startsWith('sb-'))
+              .map(el => el.outerHTML)
+              .join('');
+            // Só as regras novas desde a última story: o Emotion sempre insere no fim da folha.
+            const lidas = (window.__regrasLidas ??= new Map());
+            const css = [...document.styleSheets]
+              .filter(s => ['css-global', 'css'].includes(s.ownerNode?.getAttribute?.('data-emotion')))
+              .flatMap(s => {
+                const regras = [...s.cssRules].slice(lidas.get(s) ?? 0).map(r => r.cssText);
+                lidas.set(s, s.cssRules.length);
+                return regras;
+              });
+            return { html: document.querySelector('#storybook-root').innerHTML + portais, css };
+          }, id);
+
+          const componentes = [], falhas = [], regras = new Set();
+          await abrir(stories[0].id);
+          for (const story of stories) {
+            let r;
+            try {
+              r = await renderizar(story.id);
+            } catch {
+              // A story navegou a página (link, reload): reabre direto nela.
+              await abrir(story.id);
+              r = await renderizar(story.id).catch(e => ({ erro: e.message }));
+            }
+            if (r.erro) { falhas.push({ id: story.id, erro: r.erro.slice(0, 200) }); continue; }
+            componentes.push({ id: story.id, title: story.title, name: story.name, html: r.html });
+            r.css.forEach(c => regras.add(c));
+          }
+          await browser.close();
+
+          componentes.sort((a, b) => a.id.localeCompare(b.id));
+          // A declaração de @layer precisa vir antes das regras e o @import antes de tudo.
+          const ehDeclaracaoDeLayer = r => r.startsWith('@layer') && !r.includes('{');
+          const ordenadas = [...regras].sort((a, b) => ehDeclaracaoDeLayer(b) - ehDeclaracaoDeLayer(a));
+          const css = fontes.map(f => `@import url("${f}");`).join('\n') + '\n' + ordenadas.join('\n');
+
+          await mkdir(outDir, { recursive: true });
+          await writeFile(join(outDir, 'trinks-ui.css'), css);
+          await writeFile(join(outDir, 'components.json'), JSON.stringify({ storybook: base, geradoEm: new Date().toISOString(), css: 'trinks-ui.css', componentes, falhas }));
+          console.log(`${componentes.length} stories, ${falhas.length} falhas, ${regras.size} regras, ${Math.round(css.length / 1024)} KB de CSS em ${((Date.now() - inicio) / 1000).toFixed(1)}s`);
+          if (falhas.length) console.log(falhas);
+          EOF
+          echo "${{ steps.versao.outputs.atual }}" > site/versao.txt
+
+      - name: Upload do site
+        if: steps.versao.outputs.mudou == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy no Pages
+        if: steps.versao.outputs.mudou == 'true'
+        uses: actions/deploy-pages@v4
